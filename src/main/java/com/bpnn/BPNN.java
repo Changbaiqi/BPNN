@@ -1,18 +1,16 @@
 package com.bpnn;
 
-import org.apache.commons.math3.linear.Array2DRowFieldMatrix;
-import org.apache.commons.math3.linear.Array2DRowRealMatrix;
-import org.apache.commons.math3.linear.RealMatrix;
-
 import java.io.*;
-import java.lang.reflect.Array;
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Random;
 
 public class BPNN {
     private double studyRate; //学习率
+    private ArrayList<double[][]> resNeural; //临时存储的网络
     private ArrayList<double[][]> neural; //用于存储网络
+
     private ArrayList<double[][]> diffList; //用于存储差值
     private ArrayList<double[][]> weights; //用于存储权重值
 
@@ -28,16 +26,20 @@ public class BPNN {
         BPNN bpnn = new BPNN();
         bpnn.studyRate = studyRate;
 
+        bpnn.resNeural = new ArrayList<>();
         bpnn.neural = new ArrayList<>();
         bpnn.neural.add( new double[1][inputNeuralSum]); //初始化输入层
+        bpnn.resNeural.add(new double[1][inputNeuralSum]);
 
         //初始化隐含层
         for(int i=0 ; i < implyNeuralSum.length ; ++i){
             int i1 = implyNeuralSum[i];
+            bpnn.resNeural.add(new double[1][i1]);
             bpnn.neural.add(new double[1][i1]);
         }
 
         //初始化输出层
+        bpnn.resNeural.add(new double[1][outNeuralSum]);
         bpnn.neural.add( new double[1][outNeuralSum]);
 
         //初始化差值存储
@@ -84,7 +86,11 @@ public class BPNN {
      * @return
      */
     private double randomWeightGaussian(int num){
-        return new Random().nextGaussian()*(1/(Math.sqrt(num)));
+        double v = 2;
+        while (v>=1 || v<=-1){
+            v = new Random().nextGaussian() * (1d / (Math.sqrt(num)));
+        }
+        return v;
     }
 
 
@@ -95,6 +101,7 @@ public class BPNN {
     public void input(double inputNeural[][]){
         //输入层值：
         for(int i=0 ; i < inputNeural[0].length ; ++i){
+            resNeural.get(0)[0][i] = inputNeural[0][i];
             neural.get(0)[0][i] = inputNeural[0][i];
         }
     }
@@ -103,18 +110,12 @@ public class BPNN {
      * 向前传播
      */
     public void formDiffuse(){
-        //向前传播
-        for(int i = 0 ; i < neural.size()-1 ; ++i){
-            Array2DRowRealMatrix implyMatrix1 = new Array2DRowRealMatrix(neural.get(i));
-            Array2DRowRealMatrix implyMatrix2 = new Array2DRowRealMatrix(weights.get(i));
-            Array2DRowRealMatrix multiply1 = implyMatrix1.multiply(implyMatrix2);
-            for(int x=0 ;x < multiply1.getRow(0).length ; ++x){
-                double sigmoidValue = sigmoid(multiply1.getEntry(0, x));
-                neural.get(i+1)[0][x] = sigmoidValue;
-            }
+        //向前传播计算矩阵
+        for (int i = 0; i < neural.size() - 1; i++) {
+            formProCom(neural.get(i), weights.get(i),neural.get(i+1));
         }
-
     }
+
 
     /**
      * 逆向传播
@@ -127,40 +128,23 @@ public class BPNN {
         }
         //隐含层的差值及输入层的差值
         for(int i=diffList.size()-2  ; i >=0 ; --i){
-            Array2DRowRealMatrix diffMatRightMat = new Array2DRowRealMatrix(diffList.get(i+1));
-            Array2DRowRealMatrix weightMat = new Array2DRowRealMatrix(weights.get(i));
-
-            RealMatrix multiply = diffMatRightMat.multiply(weightMat.transpose());
-            for (int i1 = 0; i1 < multiply.getRow(0).length; i1++) {
-                diffList.get(i)[0][i1] = multiply.getEntry(0,i1);
-            }
-            //System.out.println(Arrays.deepToString(diffList.get(i)));
+            backDiffCom(diffList.get(i),weights.get(i),diffList.get(i+1));
         }
 
-
-        //逆向传播--------------------------------------------------------------------------
-        //输出层到隐含最后一层
-//        for(int i=weights.size()-1 ; i >= 0 ; --i) {
-//            for (int y = 0; y < weights.get(i).length; ++y) {
-//                for (int x = 0; x < weights.get(i)[y].length; ++x) {
-//                    double Rer= diffList.get(i+1)[0][x];
-//                    double Rl = neural.get(i+1)[0][x];
-//                    double Ll = neural.get(i)[0][y];
-//                    double rate = -Rer*Rl*(1-Rl)*Ll;
-//                    weights.get(i)[y][x] =weights.get(i)[y][x] - rate*studyRate;
-//                }
-//            }
-//        }
-
+        //这部分逆向传播是从前向后的传播计算
         for(int i =0 ; i< neural.size()-1 ; ++i){
             for(int y = 0; y < neural.get(i)[0].length; ++y){
                 double Ll = neural.get(i)[0][y];
+//                double Ll = resNeural.get(i)[0][y];
                 for(int x =0 ; x < neural.get(i+1)[0].length ;++x){
                     double oldWeight = weights.get(i)[y][x];
                     double Rer = diffList.get(i+1)[0][x];
                     double Rl = neural.get(i+1)[0][x];
+//                    double Rl = resNeural.get(i+1)[0][x];
                     double rate = -Rer*Rl*(1-Rl)*Ll;
+//                    double rate = -2*(Rer)*(Rl)*(1-Rl);
                     weights.get(i)[y][x] = oldWeight - rate*studyRate;
+                    //weights.get(i)[y][x] = oldWeight+1;
                 }
             }
         }
@@ -170,12 +154,49 @@ public class BPNN {
     }
 
     /**
+     * 向前传播计算函数
+     * @param leftNeural
+     * @param weights
+     * @return
+     */
+    private void formProCom(double leftNeural[][],double weights[][],double rightNeural[][]){
+
+        for (int y = 0; y < rightNeural[0].length; y++) {
+            double res =0;
+            for (int x = 0; x < leftNeural[0].length; x++) {
+                res+= leftNeural[0][x]*weights[x][y];
+            }
+            rightNeural[0][y] = sigmoid(res);
+        }
+    }
+
+    /**
+     * 向后算计差值
+     * @param leftDiff
+     * @param weights
+     * @param rightDiff
+     */
+    private void backDiffCom(double leftDiff[][],double weights[][],double rightDiff[][]){
+        for (int y = 0; y < leftDiff[0].length; y++) {
+            double res =0;
+            for (int x = 0; x < rightDiff[0].length; x++) {
+                res += (rightDiff[0][x]*weights[y][x]);
+            }
+            leftDiff[0][y] = res;
+        }
+    }
+
+    /**
      * sigmoid函数
      * @param value
      * @return
      */
     private double sigmoid(double value){
-        return 1/(1+ Math.exp(-value));
+//        return 1d/(1d+ Math.exp(-value));
+        if( value >=0)
+            return 1/(1+Math.exp(-value));
+        else
+            return Math.exp(value)/(1+Math.exp(value));
     }
 
     public double getStudyRate() {
@@ -188,6 +209,26 @@ public class BPNN {
 
     public ArrayList<double[][]> getDiffList() {
         return diffList;
+    }
+
+    /**
+     * 获取输出层
+     * @return
+     */
+    public double[][] getOut(){
+        return neural.get(neural.size()-1);
+    }
+    public double[] getOutMaxIndexAndValue(){
+        double index =-1;
+        double maxValue=0;
+        double[] doubles = getOut()[0];
+        for (int i = 0; i < doubles.length; i++) {
+            if(doubles[i]>maxValue){
+                index = i;
+                maxValue = doubles[i];
+            }
+        }
+        return new double[]{index,maxValue};
     }
 
     public void setWeights(ArrayList<double[][]> weightsList) {
